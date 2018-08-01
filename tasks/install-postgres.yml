@@ -1,0 +1,78 @@
+---
+# postgres installation
+# based on https://fedoraproject.org/wiki/PostgreSQL
+
+- name: Include postgres params
+  include_vars:
+    file: vars/postgres.yml
+    name: pg_vars
+  when: ovirt_engine_version < '4.2'
+
+- name: Include postgres 9.5 params
+  include_vars:
+    file: vars/postgres95.yml
+    name: pg_vars
+  when: ovirt_engine_version >= '4.2'
+
+# install libselinux-python on machine - selinux policy
+- name: install SELinux requirements to run ansible modules managing SELinux.
+  yum:
+    name: "{{ item }}"
+    state: "present"
+  with_items:
+    - libselinux-python
+    - policycoreutils-python
+
+- name: install psycopg2 requirements to run ansible modules managing postgres.
+  yum:
+    name: "python-psycopg2"
+    state: "present"
+
+- name: Install PostgreSQL uuid-ossp extension
+  yum:
+    name: "rh-postgresql95-postgresql-contrib"
+    state: "present"
+  when: ovirt_engine_version >= '4.2'
+
+- name: check PostgreSQL service
+  service:
+    name: "{{ pg_vars.service_name }}"
+    state: started
+  register: postgresql_status
+  ignore_errors: True
+
+- name: yum install PostgreSQL
+  yum:
+    name: "{{ pg_vars.server }}"
+    state: installed
+    update_cache: yes
+  when: postgresql_status is failed
+
+- name: install sudo package
+  yum:
+    name: sudo
+    state: present
+
+- name: run PostgreSQL DB config
+  become: yes
+  become_user: postgres
+  command: '{{ pg_vars.setup_cmd }}'
+  args:
+    creates: "{{ pg_vars.config_file }}"
+  tags:
+    - skip_ansible_lint
+  when: ovirt_engine_version < '4.2'
+
+- name: run PostgreSQL DB config postgres 9.5
+  command: '{{ pg_vars.setup_cmd }}'
+  args:
+    creates: "{{ pg_vars.config_file }}"
+  tags:
+    - skip_ansible_lint
+  when: ovirt_engine_version >= '4.2'
+
+- name: start PostgreSQL service
+  service:
+    name: "{{ pg_vars.service_name }}"
+    state: started
+    enabled: yes

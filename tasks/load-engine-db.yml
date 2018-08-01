@@ -1,0 +1,48 @@
+---
+- name: restore engine DB data
+  become: true
+  become_user: postgres
+  postgresql_db:
+    name: "{{ ovirt_engine_db_name }}"
+    owner: "{{ ovirt_engine_db_user }}"
+    state: restore
+    target: "{{ pgpath.stdout }}/ansible-dump/{{ ovirt_engine_remote_db_dump | basename }}"
+  when:
+    - ovirt_engine_version < '4.2'
+    - ovirt_engine_remote_db_dump is defined
+    - ovirt_engine_remote_db
+
+- name: get dump of engine database
+  become: yes
+  become_user: postgres
+  shell: "scl enable rh-postgresql95 'pg_restore -F t -d {{ ovirt_engine_db_name }} {{ pgpath.stdout }}/ansible-dump/{{ ovirt_engine_remote_db_dump | basename }}'"
+  tags:
+    - skip_ansible_lint
+  when:
+    - ovirt_engine_version >= '4.2'
+    - ovirt_engine_remote_db_dump is defined
+    - ovirt_engine_remote_db
+
+- name: restore DWH DB data
+  become: true
+  become_user: postgres
+  postgresql_db:
+    name: "{{ ovirt_engine_dwh_db_name }}"
+    owner: "{{ ovirt_engine_dwh_db_user }}"
+    state: restore
+    target: "{{ pgpath.stdout }}/ansible-dump/{{ ovirt_engine_remote_db_dwh_dump | basename }}"
+  when:
+    - ovirt_engine_version < '4.2'
+    - ovirt_engine_remote_db_dwh_dump is defined
+    - ovirt_engine_dwh_remote_db
+
+- name: get dump of engine database
+  become: yes
+  become_user: postgres
+  shell: "scl enable rh-postgresql95 'pg_restore -F t -d {{ ovirt_engine_dwh_db_name }} {{ pgpath.stdout }}/ansible-dump/{{ ovirt_engine_remote_db_dump | basename }}'"
+  tags:
+    - skip_ansible_lint
+  when:
+    - ovirt_engine_version >= '4.2'
+    - ovirt_engine_remote_db_dwh_dump is defined
+    - ovirt_engine_dwh_remote_db

@@ -1,0 +1,288 @@
+---
+# allow access engine database access from outside
+- name: "update pg_hba.conf to allow connection for ovirt_engine_remote_db"
+  lineinfile:
+    dest: '{{ pg_vars.data_dir }}/pg_hba.conf'
+    line: >
+      {{ item.type }} {{ ovirt_engine_db_name }} {{ ovirt_engine_db_user }}
+      {{ item.address | default(' ') }} {{ item.method }}
+    insertafter: EOF
+  with_items: "{{ ovirt_engine_remote_db_access | list }}"
+  when: ovirt_engine_remote_db
+
+# allow access engine dwh database access from outside
+- name: "update pg_hba.conf to allow connection for ovirt_engine_dwh_remote_db"
+  lineinfile:
+    dest: '{{ pg_vars.data_dir }}/pg_hba.conf'
+    line: >
+      {{ item.type }} {{ ovirt_engine_dwh_db_name }}
+      {{ ovirt_engine_dwh_db_user }} {{ item.address | default(' ') }}
+      {{ item.method }}
+    insertafter: EOF
+  with_items: "{{ ovirt_engine_remote_db_access | list }}"
+  when: ovirt_engine_dwh_remote_db
+
+# listen on specific address
+- name: update postgresql.conf -> listen_addresses='*'
+  lineinfile:
+    dest: "{{ pg_vars.config_file }}"
+    regexp: "^listen_addresses *=.*$"
+    line: "listen_addresses='{{ovirt_engine_remote_db_listen_address}}'"
+    insertafter: EOF
+  when: postgresql_status is failed
+
+# listen on specific port
+- name: update postgresql.conf -> port number
+  lineinfile:
+    dest: "{{ pg_vars.config_file }}"
+    regexp: "^port *=.*$"
+    line: "port={{ ovirt_engine_remote_db_port }}"
+    insertafter: EOF
+  when: postgresql_status is failed and ovirt_engine_remote_db_port != 5432
+
+# postgresql.conf: (el7)
+# Note: In RHEL/Fedora installations, you can't set the port number here;
+#   adjust it in the service file instead.
+#   /usr/lib/systemd/system/postgresql.service
+#    - Environment=PGPORT=5432
+- name: update postgresql.conf -> port number in service file (Fedora & RHEL)
+  lineinfile:
+    dest: '/usr/lib/systemd/system/{{ pg_vars.service_name }}.service'
+    backrefs: yes
+    regexp: "^Environment=PGPORT *=.*$"
+    line: "Environment=PGPORT={{ ovirt_engine_remote_db_port }}"
+  register: port_update
+  when: postgresql_status is failed and ovirt_engine_remote_db_port != 5432
+  ignore_errors: True
+
+# daemon reload - service file was changed
+- name: systemctl daemon-reload (el7)
+  command: 'systemctl daemon-reload'
+  when: postgresql_status is failed and ovirt_engine_remote_db_port != 5432 and port_update is success
+  tags:
+    - skip_ansible_lint
+
+# el6 use only service (systemctl not present)
+- name: update postgresql.conf -> port number in service file (el6)
+  lineinfile:
+    dest: '/etc/init.d/postgresql'
+    backrefs: yes
+    regexp: "^PGPORT *=.*$"
+    line: "PGPORT={{ ovirt_engine_remote_db_port }}"
+  when: postgresql_status is failed and ovirt_engine_remote_db_port != 5432 and port_update is failed
+  ignore_errors: True
+
+# Required for vacuum feature
+- name: set vacuum configuration for postgresql
+  ini_file:
+    path: "{{ pg_vars.config_file }}"
+    option: "{{ item.key }}"
+    value: "{{ item.value }}"
+    section: null
+  with_dict: "{{ ovirt_engine_remote_db_vacuum_config }}"
+  when: ovirt_engine_remote_db_vacuum
+
+# allow selinux for postgresql non-standard port
+- name: allow selinux for non-standard port
+  seport:
+    ports: "{{ ovirt_engine_remote_db_port }}"
+    proto: "tcp"
+    setype: "postgresql_port_t"
+    state: present
+  when: postgresql_status is failed and ovirt_engine_remote_db_port != 5432
+  ignore_errors: True
+
+# first check of PostgreSQL - if fail, setup
+- name: PostgreSQL reload configuration
+  service:
+    name: "{{ pg_vars.service_name }}"
+    state: restarted
+
+- name: check iptables service
+  service:
+    name: iptables
+    state: started
+  register: iptables_status
+  when: postgresql_status is failed
+  ignore_errors: True
+
+- name: open port for PostgreSQL in iptables
+  command: "iptables -I INPUT -s {{ item.address }} -p tcp -m state --state NEW -m tcp --dport {{ovirt_engine_remote_db_port}} -j ACCEPT"
+  with_items: "{{ ovirt_engine_remote_db_access | list }}"
+  when:
+    - postgresql_status is failed
+    - not iptables_status is failed
+    - item.address is defined
+  tags:
+    - skip_ansible_lint
+
+- name: save iptables rules
+  command: "/sbin/iptables-save"
+  when: postgresql_status is failed and not iptables_status is failed
+  tags:
+    - skip_ansible_lint
+
+- name: check firewalld service
+  service:
+    name: firewalld
+    state: started
+  register: firewalld_status
+  when: postgresql_status is failed
+  ignore_errors: True
+
+- name: open port for PostgreSQL in firewalld
+  firewalld:
+    source: "{{ item.address }}"
+    port: "{{ovirt_engine_remote_db_port|int}}/tcp"
+    permanent: True
+    state: enabled
+  with_items: "{{ ovirt_engine_remote_db_access | list }}"
+  when:
+    - postgresql_status is failed
+    - not firewalld_status is failed
+    - item.address is defined
+
+- name: reload firewalld
+  command: "firewall-cmd --reload"
+  when: postgresql_status is failed and not firewalld_status is failed
+  tags:
+    - skip_ansible_lint
+
+# get database dump files if defined
+- name: get postgres path
+  become: yes
+  become_user: postgres
+  shell: echo $HOME
+  register: pgpath
+  tags:
+    - skip_ansible_lint
+
+- name: create directory ansible-dump for db dump files
+  file:
+    path: "{{ pgpath.stdout }}/ansible-dump"
+    state: directory
+  when: ovirt_engine_remote_db_dump is defined or ovirt_engine_remote_db_dwh_dump is defined
+
+- name: get engine dump
+  copy:
+    src: "{{ ovirt_engine_remote_db_dump }}"
+    dest: "{{ pgpath.stdout }}/ansible-dump/{{ ovirt_engine_remote_db_dump | basename }}"
+  when:
+    - ovirt_engine_remote_db_dump is defined
+    - ovirt_engine_remote_db
+
+- name: get DWH dump
+  copy:
+    src: "{{ ovirt_engine_remote_db_dwh_dump }}"
+    dest: "{{ pgpath.stdout }}/ansible-dump/{{ ovirt_engine_remote_db_dwh_dump | basename }}"
+  when:
+    - ovirt_engine_remote_db_dwh_dump is defined
+    - ovirt_engine_dwh_remote_db
+
+# drop/create db users and databases
+- name: drop engine DB
+  become: true
+  become_user: postgres
+  postgresql_db:
+    name: "{{ ovirt_engine_db_name }}"
+    state: absent
+  when:
+    - ovirt_engine_remote_db
+    - ovirt_engine_remote_db_force
+
+- name: drop engine DB user
+  become: true
+  become_user: postgres
+  postgresql_user:
+    name: "{{ ovirt_engine_db_user }}"
+    state: absent
+  when:
+    - ovirt_engine_remote_db
+    - ovirt_engine_remote_db_force
+
+- name: create engine DB user
+  become: true
+  become_user: postgres
+  postgresql_user:
+    name: "{{ ovirt_engine_db_user }}"
+    password: "{{ ovirt_engine_db_password }}"
+  when: ovirt_engine_remote_db
+
+- name: drop DWH DB
+  become: true
+  become_user: postgres
+  postgresql_db:
+    name: "{{ ovirt_engine_dwh_db_name }}"
+    state: absent
+  when:
+    - ovirt_engine_dwh_remote_db
+    - ovirt_engine_remote_db_force
+
+- name: drop DWH DB user
+  become: true
+  become_user: postgres
+  postgresql_user:
+    name: "{{ ovirt_engine_dwh_db_user }}"
+    state: absent
+  when:
+    - ovirt_engine_dwh_remote_db
+    - ovirt_engine_remote_db_force
+
+- name: create DWH DB user
+  become: true
+  become_user: postgres
+  postgresql_user:
+    name: "{{ ovirt_engine_dwh_db_user }}"
+    password: "{{ ovirt_engine_dwh_db_password }}"
+  when: ovirt_engine_dwh_remote_db
+
+- name: create engine DB without data
+  become: true
+  become_user: postgres
+  postgresql_db:
+    name: "{{ ovirt_engine_db_name }}"
+    owner: "{{ ovirt_engine_db_user }}"
+    encoding: "{{ db_defaults.encoding }}"
+    lc_collate: "{{ db_defaults.lc_collate }}"
+    lc_ctype: "{{ db_defaults.lc_ctype }}"
+    template: "{{ db_defaults.template }}"
+  when:
+    - ovirt_engine_remote_db
+
+- name: create DWH DB without data
+  become: true
+  become_user: postgres
+  postgresql_db:
+    name: "{{ ovirt_engine_dwh_db_name }}"
+    owner: "{{ ovirt_engine_dwh_db_user }}"
+    encoding: "{{ db_defaults.encoding }}"
+    lc_collate: "{{ db_defaults.lc_collate }}"
+    lc_ctype: "{{ db_defaults.lc_ctype }}"
+    template: "{{ db_defaults.template }}"
+  when:
+    - ovirt_engine_dwh_remote_db
+
+- name: load engine and dwh data
+  include_tasks: load-engine-db.yml
+  when: virt_engine_remote_db_dump is defined or ovirt_engine_remote_db_dump is defined
+# drop/create db users and databases - end
+
+- name: Enable PostgreSQL uuid-ossp extension
+  become: true
+  become_user: postgres
+  postgresql_ext:
+    name: 'uuid-ossp'
+    db: "{{ ovirt_engine_db_name }}"
+  when:
+    - ovirt_engine_version >= '4.2'
+
+- name: check PostgreSQL service
+  service:
+    name: "{{ pg_vars.service_name }}"
+    state: started
+    enabled: yes
+
+- name: clean dump files
+  file:
+    path: '{{ pgpath.stdout }}/ansible-dump'
+    state: 'absent'

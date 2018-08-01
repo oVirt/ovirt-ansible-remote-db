@@ -1,0 +1,19 @@
+---
+galaxy_info:
+  author: "Petr Kubica, Lucie Leistnerova"
+  description: "Role to install oVirt DB on remote machine"
+  company: "Red Hat, Inc."
+  license: "GPLv3"
+  min_ansible_version: 2.4
+  platforms:
+  - name: EL
+    versions:
+      - 6
+      - 7
+  - name: CentOS
+    versions:
+      - 7
+  galaxy_tags:
+    - installer
+
+dependencies: []

@@ -1,0 +1,34 @@
+---
+ovirt_engine_remote_db_port: 5432
+ovirt_engine_remote_db_listen_address: '*'
+ovirt_engine_db_name: 'engine'
+ovirt_engine_db_user: 'engine'
+
+ovirt_engine_remote_db: False
+ovirt_engine_dwh_remote_db: False
+
+ovirt_engine_dwh_db_name: 'ovirt_engine_history'
+ovirt_engine_dwh_db_user: 'ovirt_engine_history'
+
+ovirt_engine_remote_db_access:
+  -
+    type: host
+    address: 0.0.0.0/0
+    method: md5
+
+ovirt_engine_remote_db_vacuum: true
+ovirt_engine_remote_db_vacuum_config:
+  'autovacuum_vacuum_scale_factor': 0.01
+  'autovacuum_analyze_scale_factor': 0.075
+  'autovacuum_max_workers': 6
+  'maintenance_work_mem': 65536
+  'max_connections': 150
+  'lc_messages': 'en_US.UTF-8'
+
+ovirt_engine_remote_db_force: False
+
+db_defaults:
+  'encoding': 'UTF-8'
+  'lc_collate': 'en_US.UTF-8'
+  'lc_ctype': 'en_US.UTF-8'
+  'template': 'template0'

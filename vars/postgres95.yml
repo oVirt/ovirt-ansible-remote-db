@@ -1,0 +1,6 @@
+---
+service_name: "rh-postgresql95-postgresql"
+server: "rh-postgresql95-postgresql-server"
+data_dir: "/var/opt/rh/rh-postgresql95/lib/pgsql/data"
+config_file: "/var/opt/rh/rh-postgresql95/lib/pgsql/data/postgresql.conf"
+setup_cmd: "/opt/rh/rh-postgresql95/root/usr/bin/postgresql-setup --initdb"
